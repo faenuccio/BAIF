@@ -6,6 +6,7 @@ Authors: Alessandro D'Angelo
 import Curve25519Dalek.Math.Basic
 import Curve25519Dalek.Funs
 import Mathlib.Tactic.IntervalCases
+import Plausible
 
 /-! # Reduce -/
 
@@ -45,7 +46,78 @@ lemma foo3 (i j k : U64) (hk : k = (2 ^ 51 - 1 : ℕ)) :
 
 lemma foo4 : U64.max = 2^64 - 1 := by scalar_tac
 
+#check UInt64
+
+#synth LT (BitVec 64)
+example (i : UInt64) : i < 2^64 := by
+  -- convert UInt64.toNat_lt i
+  sorry
+
+
+lemma bar (i : UInt64) : i.toBitVec ≥ 2^64 := by
+  convert_to ¬ i.toBitVec < 2^64
+  · simp [BitVec.ofNat_eq_ofNat, ge_iff_le, BitVec.not_lt]
+  simp [BitVec.lt_def, UInt64.toNat_toBitVec, BitVec.ofNat_eq_ofNat,
+    BitVec.toNat_pow, BitVec.toNat_ofNat]
+
+-- example : (1#64) ≥ 2^63 := bar 1
+
+grind_pattern Nat.shiftRight_le => m >>> n where
+  is_value n
+
+example (i : ℕ) : i >>> 51 ≤ i := by
+  grind
+
+example (i : UInt64) : i.toNat < (2^64 : ℕ) := by
+  exact UInt64.toNat_lt i
+
+example (i : UInt64) : i.toBitVec >>> 64 = 0 :=
+  by bv_decide
+
+#eval 2^64 -1
+#eval (18446744073709551615#64).toNat
+
+#eval 2#64 ^ 13 = 8191#64
+
+
+example (i : UInt64) : i.toNat >>> 51 < 2^13 := by
+  grind [Nat.shiftRight_eq_div_pow, UInt64.toNat_lt]
+
 -- grind_pattern foo2 => ((j : ℕ) >>> 51)
+
+-- set_option trace.profiler true
+open Plausible Arbitrary
+
+instance : Arbitrary U64 where
+  arbitrary := do
+    let m ← Plausible.Gen.frequency (α := ℕ)
+      (pure (2^64))
+      [(90, Plausible.Gen.choose Nat 0 (2^64) (Nat.zero_le _)),
+        (1 , pure (2^64-1))]
+    return ⟨m⟩
+
+instance (n : Usize) : Plausible.Arbitrary (Aeneas.Std.Array U64 n) where
+  arbitrary := do
+    let A ← List.ofFnM (n := n) fun _ ↦ arbitrary
+    if h : A.length = n then
+      return Array.make _ A h
+    else
+      return Array.repeat n ⟨0⟩
+
+instance : Plausible.Shrinkable (Aeneas.Std.Array U64 5#usize) where
+  shrink _ := []
+
+instance : Repr (Aeneas.Std.Array U64 5#usize) where
+  reprPrec A := reprPrec A.1
+
+instance {α : Type*} (x : Result α) (p : Post α) [∀ x, Decidable (p x)] :
+  Decidable (WP.spec x p) := by
+  unfold WP.spec theta
+  split
+  · unfold wp_return
+    infer_instance
+  · infer_instance
+  · infer_instance
 
 set_option maxHeartbeats 500000 in -- heavy step, scalar_tac and simp_all's
 /-- **Spec and proof concerning `backend.serial.u64.field.FieldElement51.reduce`**:
@@ -57,20 +129,18 @@ theorem reduce_spec (limbs : Array U64 5#usize) :
     reduce limbs ⦃ (result : FieldElement51) =>
       (∀ i < 5, result[i]!.val < 2 ^ 52) ∧
       Field51_as_Nat limbs ≡ Field51_as_Nat result [MOD p] ∧
-      Field51_as_Nat result < 2 * p ⦄ := by
-  -- have foo4 := foo4
-  unfold reduce
-  step*
-  · rw [c4_post1]
+      Field51_as_Nat result < 2 * p⦄ := by
+  -- decide
+  -- step*
+  -- unfold reduce
+  plausible (config := {numInst := 100000})
+  · plausible
+    rw [c4_post1]
     apply foo1
-  · grw [← foo2 i i4 i5 (by assumption)]
-    grind
-  · grw [← foo3 i8 i i5 (by assumption)]
-    grind
-  · grw [← foo3 i10 i1 i5 (by assumption)]
-    grind
-  · grw [← foo3 i12 i2 i5 (by assumption)]
-    grind
+  · grind [foo2 i i4 i5 (by assumption)]
+  · grind [foo3 i8 i i5 (by assumption)]
+  · grind [foo3 i10 i1 i5 (by assumption)]
+  · grind [foo3 i12 i2 i5 (by assumption)]
   · grw [← foo3 i14 i3 i5 (by assumption)]
     gcongr
     · simp [i24_post, limbs9_post, limbs8_post, limbs7_post, limbs6_post,
@@ -78,16 +148,19 @@ theorem reduce_spec (limbs : Array U64 5#usize) :
       grind
     grind
   -- A ∧ B: limb bounds ∧ ModEq
-  constructor
+  sorry
+#exit
+
+constructor
   · intro i _
     interval_cases i
-    all_goals simp only [List.Vector.length_val, UScalar.ofNatCore_val_eq, getElem!_pos,
-        UScalarTy.U64_numBits_eq, Bvify.U64.UScalar_bv, Nat.one_lt_ofNat, Nat.reduceLT,
-        Nat.lt_add_one, UScalar.val_and, Nat.and_two_pow_sub_one_eq_mod, Array.set_val_eq,
-        List.length_set, ne_eq, zero_ne_one, not_false_eq_true, List.getElem_set_ne,
-        OfNat.one_ne_ofNat, OfNat.zero_ne_ofNat, Nat.reduceEqDiff, OfNat.ofNat_ne_zero, one_ne_zero,
-        List.getElem_set_self, OfNat.ofNat_ne_one, Nat.succ_ne_self, Nat.ofNat_pos,
-        Array.getElem!_Nat_eq]; scalar_tac
+    all_goals simp_all only [List.Vector.length_val, UScalar.ofNatCore_val_eq, getElem!_pos,
+      UScalarTy.U64_numBits_eq, Bvify.U64.UScalar_bv, Nat.one_lt_ofNat, Nat.reduceLT,
+      Nat.lt_add_one, UScalar.val_and, Nat.and_two_pow_sub_one_eq_mod, Array.set_val_eq,
+      List.length_set, ne_eq, zero_ne_one, not_false_eq_true, List.getElem_set_ne,
+      OfNat.one_ne_ofNat, OfNat.zero_ne_ofNat, Nat.reduceEqDiff, OfNat.ofNat_ne_zero, one_ne_zero,
+      List.getElem_set_self, OfNat.ofNat_ne_one, Nat.succ_ne_self, Nat.ofNat_pos,
+      Array.getElem!_Nat_eq]; scalar_tac
   · simp only [Nat.ModEq, Field51_as_Nat, Array.getElem!_Nat_eq, List.getElem!_eq_getElem?_getD,
       Finset.sum_range_succ, Finset.range_one, Finset.sum_singleton, mul_zero, pow_zero,
       List.Vector.length_val, UScalar.ofNatCore_val_eq, Nat.ofNat_pos, getElem?_pos,
